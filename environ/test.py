@@ -1,19 +1,25 @@
 from __future__ import print_function
-from __future__ import unicode_literals
+import json
+import os
+import sys
 import unittest
 
-from environ import *
+from django.core.exceptions import ImproperlyConfigured
+
+from environ import Env, Path, REDIS_DRIVER
 
 
 class BaseTests(unittest.TestCase):
 
     URL = 'http://www.google.com/'
-    POSTGRES = 'postgres://uf07k1i6d8ia0v:wegauwhgeuioweg@ec2-107-21-253-135.compute-1.amazonaws.com:5431/d8r82722r2kuvn'
-    MYSQL = 'mysql://bea6eb025ca0d8:69772142@us-cdbr-east.cleardb.com/heroku_97681db3eff7580?reconnect=true'
+    POSTGRES = 'postgres://uf07k1:wegauwhg@ec2-107-21-253-135.compute-1.amazonaws.com:5431/d8r82722'
+    MYSQL = 'mysql://bea6eb0:69772142@us-cdbr-east.cleardb.com/heroku_97681?reconnect=true'
     MYSQLGIS = 'mysqlgis://user:password@127.0.0.1/some_database'
     SQLITE = 'sqlite:////full/path/to/your/database/file.sqlite'
+    ORACLE_TNS = 'oracle://user:password@sid/'
+    ORACLE = 'oracle://user:password@host:1521/sid'
     MEMCACHE = 'memcache://127.0.0.1:11211'
-    REDIS = 'rediscache://127.0.0.1:6379:1?client_class=redis_cache.client.DefaultClient&password=secret'
+    REDIS = 'rediscache://127.0.0.1:6379:1?client_class=django_redis.client.DefaultClient&password=secret'
     EMAIL = 'smtps://user@domain.com:password@smtp.example.com:587'
     JSON = dict(one='bar', two=2, three=33.44)
     DICT = dict(foo='bar', test='on')
@@ -33,6 +39,7 @@ class BaseTests(unittest.TestCase):
                     BOOL_FALSE_VAR2='False',
                     PROXIED_VAR='$STR_VAR',
                     INT_LIST='42,33',
+                    INT_TUPLE='(42,33)',
                     STR_LIST_WITH_SPACES=' foo,  bar',
                     EMPTY_LIST='',
                     DICT_VAR='foo=bar,test=on',
@@ -40,6 +47,8 @@ class BaseTests(unittest.TestCase):
                     DATABASE_MYSQL_URL=cls.MYSQL,
                     DATABASE_MYSQL_GIS_URL=cls.MYSQLGIS,
                     DATABASE_SQLITE_URL=cls.SQLITE,
+                    DATABASE_ORACLE_URL=cls.ORACLE,
+                    DATABASE_ORACLE_TNS_URL=cls.ORACLE_TNS,
                     CACHE_URL=cls.MEMCACHE,
                     CACHE_REDIS=cls.REDIS,
                     EMAIL_URL=cls.EMAIL,
@@ -48,13 +57,12 @@ class BaseTests(unittest.TestCase):
                     PATH_VAR=cls.PATH)
 
     def setUp(self):
+        self._old_environ = os.environ
+        os.environ = Env.ENVIRON = self.generateData()
         self.env = Env()
-        self.environ = self.generateData()
-        self._orig_environ = os.environ
-        os.environ = self.environ
 
     def tearDown(self):
-        os.environ = self._orig_environ
+        os.environ = self._old_environ
 
     def assertTypeAndValue(self, type_, expected, actual):
         self.assertEqual(type_, type(actual))
@@ -70,8 +78,8 @@ class EnvTests(BaseTests):
         self.assertRaises(ImproperlyConfigured, self.env, 'not_present')
 
     def test_str(self):
-        self.assertTypeAndValue(text_type, 'bar', self.env('STR_VAR'))
-        self.assertTypeAndValue(text_type, 'bar', self.env.str('STR_VAR'))
+        self.assertTypeAndValue(str, 'bar', self.env('STR_VAR'))
+        self.assertTypeAndValue(str, 'bar', self.env.str('STR_VAR'))
 
     def test_int(self):
         self.assertTypeAndValue(int, 42, self.env('INT_VAR', cast=int))
@@ -99,15 +107,20 @@ class EnvTests(BaseTests):
         self.assertTypeAndValue(bool, False, self.env.bool('BOOL_FALSE_VAR'))
 
     def test_proxied_value(self):
-        self.assertTypeAndValue(text_type, 'bar', self.env('PROXIED_VAR'))
+        self.assertTypeAndValue(str, 'bar', self.env('PROXIED_VAR'))
 
     def test_int_list(self):
         self.assertTypeAndValue(list, [42, 33], self.env('INT_LIST', cast=[int]))
         self.assertTypeAndValue(list, [42, 33], self.env.list('INT_LIST', int))
 
+    def test_int_tuple(self):
+        self.assertTypeAndValue(tuple, (42, 33), self.env('INT_LIST', cast=(int,)))
+        self.assertTypeAndValue(tuple, (42, 33), self.env.tuple('INT_LIST', int))
+        self.assertTypeAndValue(tuple, ('42', '33'), self.env.tuple('INT_LIST'))
+
     def test_str_list_with_spaces(self):
         self.assertTypeAndValue(list, [' foo', '  bar'],
-                                self.env('STR_LIST_WITH_SPACES', cast=[text_type]))
+                                self.env('STR_LIST_WITH_SPACES', cast=[str]))
         self.assertTypeAndValue(list, [' foo', '  bar'],
                                 self.env.list('STR_LIST_WITH_SPACES'))
 
@@ -121,40 +134,60 @@ class EnvTests(BaseTests):
 
         self.assertEqual({'a': '1'}, self.env.parse_value('a=1', dict))
         self.assertEqual({'a': 1}, self.env.parse_value('a=1', dict(value=int)))
-        self.assertEqual({'a': ['1', '2', '3']}, self.env.parse_value('a=1,2,3', dict(value=[text_type])))
+        self.assertEqual({'a': ['1', '2', '3']}, self.env.parse_value('a=1,2,3', dict(value=[str])))
         self.assertEqual({'a': [1, 2, 3]}, self.env.parse_value('a=1,2,3', dict(value=[int])))
         self.assertEqual({'a': 1, 'b': [1.1, 2.2], 'c': 3},
                          self.env.parse_value('a=1;b=1.1,2.2;c=3', dict(value=int, cast=dict(b=[float]))))
+
+        self.assertEqual({'a': "uname", 'c': "http://www.google.com", 'b': True},
+                         self.env.parse_value('a=uname;c=http://www.google.com;b=True', dict(value=str, cast=dict(b=bool))))
 
     def test_url_value(self):
         url = self.env.url('URL_VAR')
         self.assertEqual(url.__class__, self.env.URL_CLASS)
         self.assertEqual(url.geturl(), self.URL)
+        self.assertEqual(None, self.env.url('OTHER_URL', default=None))
 
     def test_db_url_value(self):
         pg_config = self.env.db()
         self.assertEqual(pg_config['ENGINE'], 'django.db.backends.postgresql_psycopg2')
-        self.assertEqual(pg_config['NAME'], 'd8r82722r2kuvn')
+        self.assertEqual(pg_config['NAME'], 'd8r82722')
         self.assertEqual(pg_config['HOST'], 'ec2-107-21-253-135.compute-1.amazonaws.com')
-        self.assertEqual(pg_config['USER'], 'uf07k1i6d8ia0v')
-        self.assertEqual(pg_config['PASSWORD'], 'wegauwhgeuioweg')
+        self.assertEqual(pg_config['USER'], 'uf07k1')
+        self.assertEqual(pg_config['PASSWORD'], 'wegauwhg')
         self.assertEqual(pg_config['PORT'], 5431)
 
         mysql_config = self.env.db('DATABASE_MYSQL_URL')
         self.assertEqual(mysql_config['ENGINE'], 'django.db.backends.mysql')
-        self.assertEqual(mysql_config['NAME'], 'heroku_97681db3eff7580')
+        self.assertEqual(mysql_config['NAME'], 'heroku_97681')
         self.assertEqual(mysql_config['HOST'], 'us-cdbr-east.cleardb.com')
-        self.assertEqual(mysql_config['USER'], 'bea6eb025ca0d8')
+        self.assertEqual(mysql_config['USER'], 'bea6eb0')
         self.assertEqual(mysql_config['PASSWORD'], '69772142')
-        self.assertEqual(mysql_config['PORT'], None)
-        
+        self.assertEqual(mysql_config['PORT'], '')
+
         mysql_gis_config = self.env.db('DATABASE_MYSQL_GIS_URL')
         self.assertEqual(mysql_gis_config['ENGINE'], 'django.contrib.gis.db.backends.mysql')
         self.assertEqual(mysql_gis_config['NAME'], 'some_database')
         self.assertEqual(mysql_gis_config['HOST'], '127.0.0.1')
         self.assertEqual(mysql_gis_config['USER'], 'user')
         self.assertEqual(mysql_gis_config['PASSWORD'], 'password')
-        self.assertEqual(mysql_gis_config['PORT'], None)
+        self.assertEqual(mysql_gis_config['PORT'], '')
+
+        oracle_config = self.env.db('DATABASE_ORACLE_TNS_URL')
+        self.assertEqual(oracle_config['ENGINE'], 'django.db.backends.oracle')
+        self.assertEqual(oracle_config['NAME'], 'sid')
+        self.assertEqual(oracle_config['HOST'], '')
+        self.assertEqual(oracle_config['USER'], 'user')
+        self.assertEqual(oracle_config['PASSWORD'], 'password')
+        self.assertFalse('PORT' in oracle_config)
+
+        oracle_config = self.env.db('DATABASE_ORACLE_URL')
+        self.assertEqual(oracle_config['ENGINE'], 'django.db.backends.oracle')
+        self.assertEqual(oracle_config['NAME'], 'sid')
+        self.assertEqual(oracle_config['HOST'], 'host')
+        self.assertEqual(oracle_config['USER'], 'user')
+        self.assertEqual(oracle_config['PASSWORD'], 'password')
+        self.assertEqual(oracle_config['PORT'], 1521)
 
         sqlite_config = self.env.db('DATABASE_SQLITE_URL')
         self.assertEqual(sqlite_config['ENGINE'], 'django.db.backends.sqlite3')
@@ -162,29 +195,27 @@ class EnvTests(BaseTests):
 
     def test_cache_url_value(self):
 
-        cache_config = self.env.cache()
+        cache_config = self.env.cache_url()
         self.assertEqual(cache_config['BACKEND'], 'django.core.cache.backends.memcached.MemcachedCache')
         self.assertEqual(cache_config['LOCATION'], '127.0.0.1:11211')
 
-        redis_config = self.env.cache('CACHE_REDIS')
-        self.assertEqual(redis_config['BACKEND'], 'redis_cache.cache.RedisCache')
-        self.assertEqual(redis_config['LOCATION'], '127.0.0.1:6379:1')
+        redis_config = self.env.cache_url('CACHE_REDIS')
+        self.assertEqual(redis_config['BACKEND'], 'django_redis.cache.RedisCache')
+        self.assertEqual(redis_config['LOCATION'], 'redis://127.0.0.1:6379:1')
         self.assertEqual(redis_config['OPTIONS'], {
-            'CLIENT_CLASS': 'redis_cache.client.DefaultClient',
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
             'PASSWORD': 'secret',
         })
 
     def test_email_url_value(self):
 
-        email_config = self.env.email()
-        self.assertEqual(email_config['EMAIL_BACKEND'],
-                'django.core.mail.backends.smtp.EmailBackend')
+        email_config = self.env.email_url()
+        self.assertEqual(email_config['EMAIL_BACKEND'], 'django.core.mail.backends.smtp.EmailBackend')
         self.assertEqual(email_config['EMAIL_HOST'], 'smtp.example.com')
         self.assertEqual(email_config['EMAIL_HOST_PASSWORD'], 'password')
         self.assertEqual(email_config['EMAIL_HOST_USER'], 'user@domain.com')
         self.assertEqual(email_config['EMAIL_PORT'], 587)
         self.assertEqual(email_config['EMAIL_USE_TLS'], True)
-
 
     def test_json_value(self):
         self.assertEqual(self.JSON, self.env.json('JSON_VAR'))
@@ -197,30 +228,41 @@ class EnvTests(BaseTests):
 class FileEnvTests(EnvTests):
 
     def setUp(self):
+        super(FileEnvTests, self).setUp()
+        Env.ENVIRON = {}
         self.env = Env()
-        self._orig_environ = os.environ
-        os.environ = {}
         file_path = Path(__file__, is_file=True)('test_env.txt')
         self.env.read_env(file_path, PATH_VAR=Path(__file__, is_file=True).__root__)
 
+class SubClassTests(EnvTests):
+
+    def setUp(self):
+        super(SubClassTests, self).setUp()
+        self.CONFIG = self.generateData()
+        class MyEnv(Env):
+            ENVIRON = self.CONFIG
+        self.env = MyEnv()
+
+    def test_singleton_environ(self):
+        self.assertTrue(self.CONFIG is self.env.ENVIRON)
 
 class SchemaEnvTests(BaseTests):
 
     def test_schema(self):
-        env = Env(INT_VAR=int, NOT_PRESENT_VAR=(float, 33.3), STR_VAR=text_type,
+        env = Env(INT_VAR=int, NOT_PRESENT_VAR=(float, 33.3), STR_VAR=str,
                   INT_LIST=[int], DEFAULT_LIST=([int], [2]))
 
         self.assertTypeAndValue(int, 42, env('INT_VAR'))
         self.assertTypeAndValue(float, 33.3, env('NOT_PRESENT_VAR'))
 
-        self.assertTypeAndValue(text_type, 'bar', env('STR_VAR'))
-        self.assertTypeAndValue(text_type, 'foo', env('NOT_PRESENT2', default='foo'))
+        self.assertTypeAndValue(str, 'bar', env('STR_VAR'))
+        self.assertTypeAndValue(str, 'foo', env('NOT_PRESENT2', default='foo'))
 
         self.assertTypeAndValue(list, [42, 33], env('INT_LIST'))
         self.assertTypeAndValue(list, [2], env('DEFAULT_LIST'))
 
         # Override schema in this one case
-        self.assertTypeAndValue(text_type, '42', env('INT_VAR', cast=text_type))
+        self.assertTypeAndValue(str, '42', env('INT_VAR', cast=str))
 
 
 class DatabaseTestSuite(unittest.TestCase):
@@ -267,7 +309,18 @@ class DatabaseTestSuite(unittest.TestCase):
         self.assertEqual(url['HOST'], 'us-cdbr-east.cleardb.com')
         self.assertEqual(url['USER'], 'bea6eb025ca0d8')
         self.assertEqual(url['PASSWORD'], '69772142')
-        self.assertEqual(url['PORT'], None)
+        self.assertEqual(url['PORT'], '')
+
+    def test_mysql_no_password(self):
+        url = 'mysql://travis@localhost/test_db'
+        url = Env.db_url_config(url)
+
+        self.assertEqual(url['ENGINE'], 'django.db.backends.mysql')
+        self.assertEqual(url['NAME'], 'test_db')
+        self.assertEqual(url['HOST'], 'localhost')
+        self.assertEqual(url['USER'], 'travis')
+        self.assertEqual(url['PASSWORD'], '')
+        self.assertEqual(url['PORT'], '')
 
     def test_empty_sqlite_url(self):
         url = 'sqlite://'
@@ -293,6 +346,17 @@ class DatabaseTestSuite(unittest.TestCase):
         self.assertEqual(url['OPTIONS'], {
             'init_command': 'SET storage_engine=INNODB',
         })
+
+    def test_database_ldap_url(self):
+        url = 'ldap://cn=admin,dc=nodomain,dc=org:some_secret_password@ldap.nodomain.org/'
+        url = Env.db_url_config(url)
+
+        self.assertEqual(url['ENGINE'], 'ldapdb.backends.ldap')
+        self.assertEqual(url['HOST'], 'ldap.nodomain.org')
+        self.assertEqual(url['PORT'], '')
+        self.assertEqual(url['NAME'], 'ldap://ldap.nodomain.org')
+        self.assertEqual(url['USER'], 'cn=admin,dc=nodomain,dc=org')
+        self.assertEqual(url['PASSWORD'], 'some_secret_password')
 
 
 class CacheTestSuite(unittest.TestCase):
@@ -368,21 +432,36 @@ class CacheTestSuite(unittest.TestCase):
         self.assertEqual(url['LOCATION'], '')
 
     def test_redis_parsing(self):
-        url = 'rediscache://127.0.0.1:6379:1?client_class=redis_cache.client.DefaultClient&password=secret'
+        url = 'rediscache://127.0.0.1:6379:1?client_class=django_redis.client.DefaultClient&password=secret'
         url = Env.cache_url_config(url)
 
-        self.assertEqual(url['BACKEND'], 'redis_cache.cache.RedisCache')
-        self.assertEqual(url['LOCATION'], '127.0.0.1:6379:1')
+        self.assertEqual(url['BACKEND'], REDIS_DRIVER)
+        self.assertEqual(url['LOCATION'], 'redis://127.0.0.1:6379:1')
         self.assertEqual(url['OPTIONS'], {
-            'CLIENT_CLASS': 'redis_cache.client.DefaultClient',
+            'CLIENT_CLASS': 'django_redis.client.DefaultClient',
             'PASSWORD': 'secret',
         })
 
     def test_redis_socket_parsing(self):
         url = 'rediscache:///path/to/socket:1'
         url = Env.cache_url_config(url)
-        self.assertEqual(url['BACKEND'], 'redis_cache.cache.RedisCache')
-        self.assertEqual(url['LOCATION'], 'unix:/path/to/socket:1')
+        self.assertEqual(url['BACKEND'], 'django_redis.cache.RedisCache')
+        self.assertEqual(url['LOCATION'], 'unix:///path/to/socket:1')
+
+    def test_redis_with_password_parsing(self):
+        url = 'rediscache://:redispass@127.0.0.1:6379/0'
+        url = Env.cache_url_config(url)
+        self.assertEqual(REDIS_DRIVER, url['BACKEND'])
+        self.assertEqual(url['LOCATION'], 'redis://:redispass@127.0.0.1:6379/0')
+
+    def test_redis_socket_url(self):
+        url = 'redis://:redispass@/path/to/socket.sock?db=0'
+        url = Env.cache_url_config(url)
+        self.assertEqual(REDIS_DRIVER, url['BACKEND'])
+        self.assertEqual(url['LOCATION'], 'unix://:redispass@/path/to/socket.sock')
+        self.assertEqual(url['OPTIONS'], {
+            'DB': 0
+        })
 
     def test_options_parsing(self):
         url = 'filecache:///var/tmp/django_cache?timeout=60&max_entries=1000&cull_frequency=0'
@@ -398,7 +477,7 @@ class CacheTestSuite(unittest.TestCase):
 
     def test_custom_backend(self):
         url = 'memcache://127.0.0.1:5400?foo=option&bars=9001'
-        backend = 'redis_cache.cache.RedisCache'
+        backend = 'django_redis.cache.RedisCache'
         url = Env.cache_url_config(url, backend)
 
         self.assertEqual(url['BACKEND'], backend)
@@ -409,14 +488,113 @@ class CacheTestSuite(unittest.TestCase):
         })
 
 
+class SearchTestSuite(unittest.TestCase):
+
+    solr_url = 'solr://127.0.0.1:8983/solr'
+    elasticsearch_url = 'elasticsearch://127.0.0.1:9200/index'
+    whoosh_url = 'whoosh:///home/search/whoosh_index'
+    xapian_url = 'xapian:///home/search/xapian_index'
+    simple_url = 'simple:///'
+
+    def test_solr_parsing(self):
+        url = Env.search_url_config(self.solr_url)
+
+        self.assertEqual(url['ENGINE'], 'haystack.backends.solr_backend.SolrEngine')
+        self.assertEqual(url['URL'], 'http://127.0.0.1:8983/solr')
+
+    def test_solr_multicore_parsing(self):
+        timeout = 360
+        index = 'solr_index'
+        url = '%s/%s?TIMEOUT=%s' % (self.solr_url, index, timeout)
+        url = Env.search_url_config(url)
+
+        self.assertEqual(url['ENGINE'], 'haystack.backends.solr_backend.SolrEngine')
+        self.assertEqual(url['URL'], 'http://127.0.0.1:8983/solr/solr_index')
+        self.assertEqual(url['TIMEOUT'], timeout)
+        self.assertTrue('INDEX_NAME' not in url)
+        self.assertTrue('PATH' not in url)
+
+    def test_elasticsearch_parsing(self):
+        timeout = 360
+        url = '%s?TIMEOUT=%s' % (self.elasticsearch_url, timeout)
+        url = Env.search_url_config(url)
+
+        self.assertEqual(url['ENGINE'], 'haystack.backends.elasticsearch_backend.ElasticsearchSearchEngine')
+        self.assertTrue('INDEX_NAME' in url.keys())
+        self.assertEqual(url['INDEX_NAME'], 'index')
+        self.assertTrue('TIMEOUT' in url.keys())
+        self.assertEqual(url['TIMEOUT'], timeout)
+        self.assertTrue('PATH' not in url)
+
+    def test_whoosh_parsing(self):
+        storage = 'file'  # or ram
+        post_limit = 128 * 1024 * 1024
+        url = '%s?STORAGE=%s&POST_LIMIT=%s' % (self.whoosh_url, storage, post_limit)
+        url = Env.search_url_config(url)
+
+        self.assertEqual(url['ENGINE'], 'haystack.backends.whoosh_backend.WhooshEngine')
+        self.assertTrue('PATH' in url.keys())
+        self.assertEqual(url['PATH'], '/home/search/whoosh_index')
+        self.assertTrue('STORAGE' in url.keys())
+        self.assertEqual(url['STORAGE'], storage)
+        self.assertTrue('POST_LIMIT' in url.keys())
+        self.assertEqual(url['POST_LIMIT'], post_limit)
+        self.assertTrue('INDEX_NAME' not in url)
+
+    def test_xapian_parsing(self):
+        flags = 'myflags'
+        url = '%s?FLAGS=%s' % (self.xapian_url, flags)
+        url = Env.search_url_config(url)
+
+        self.assertEqual(url['ENGINE'], 'haystack.backends.xapian_backend.XapianEngine')
+        self.assertTrue('PATH' in url.keys())
+        self.assertEqual(url['PATH'], '/home/search/xapian_index')
+        self.assertTrue('FLAGS' in url.keys())
+        self.assertEqual(url['FLAGS'], flags)
+        self.assertTrue('INDEX_NAME' not in url)
+
+    def test_simple_parsing(self):
+        url = Env.search_url_config(self.simple_url)
+
+        self.assertEqual(url['ENGINE'], 'haystack.backends.simple_backend.SimpleEngine')
+        self.assertTrue('INDEX_NAME' not in url)
+        self.assertTrue('PATH' not in url)
+
+    def test_common_args_parsing(self):
+        excluded_indexes = 'myapp.indexes.A,myapp.indexes.B'
+        include_spelling = 1
+        batch_size = 100
+        params = 'EXCLUDED_INDEXES=%s&INCLUDE_SPELLING=%s&BATCH_SIZE=%s' % (
+            excluded_indexes,
+            include_spelling,
+            batch_size
+        )
+        for url in [
+            self.solr_url,
+            self.elasticsearch_url,
+            self.whoosh_url,
+            self.xapian_url,
+            self.simple_url,
+        ]:
+            url = '?'.join([url, params])
+            url = Env.search_url_config(url)
+
+            self.assertTrue('EXCLUDED_INDEXES' in url.keys())
+            self.assertTrue('myapp.indexes.A' in url['EXCLUDED_INDEXES'])
+            self.assertTrue('myapp.indexes.B' in url['EXCLUDED_INDEXES'])
+            self.assertTrue('INCLUDE_SPELLING'in url.keys())
+            self.assertTrue(url['INCLUDE_SPELLING'])
+            self.assertTrue('BATCH_SIZE' in url.keys())
+            self.assertEqual(url['BATCH_SIZE'], 100)
+
+
 class EmailTests(unittest.TestCase):
 
     def test_smtp_parsing(self):
         url = 'smtps://user@domain.com:password@smtp.example.com:587'
         url = Env.email_url_config(url)
 
-        self.assertEqual(url['EMAIL_BACKEND'],
-                'django.core.mail.backends.smtp.EmailBackend')
+        self.assertEqual(url['EMAIL_BACKEND'], 'django.core.mail.backends.smtp.EmailBackend')
         self.assertEqual(url['EMAIL_HOST'], 'smtp.example.com')
         self.assertEqual(url['EMAIL_HOST_PASSWORD'], 'password')
         self.assertEqual(url['EMAIL_HOST_USER'], 'user@domain.com')
@@ -450,9 +628,13 @@ class PathTests(unittest.TestCase):
         self.assertTrue(Path('/home') == Path('/home'))
         self.assertTrue(Path('/home') != Path('/home/dev'))
 
+        self.assertEqual(Path('/home/foo/').rfind('/'), str(Path('/home/foo')).rfind('/'))
+        self.assertEqual(Path('/home/foo/').find('/home'), str(Path('/home/foo/')).find('/home'))
+        self.assertEqual(Path('/home/foo/')[1], str(Path('/home/foo/'))[1])
+
         self.assertEqual(~Path('/home'), Path('/'))
         self.assertEqual(Path('/') + 'home', Path('/home'))
-        self.assertEqual(Path('/') + 'home' + Path('/public'), Path('/home/public'))
+        self.assertEqual(Path('/') + '/home/public', Path('/home/public'))
         self.assertEqual(Path('/home/dev/public') - 2, Path('/home'))
         self.assertEqual(Path('/home/dev/public') - 'public', Path('/home/dev'))
 
@@ -462,7 +644,11 @@ class PathTests(unittest.TestCase):
 def load_suite():
 
     test_suite = unittest.TestSuite()
-    for case in [EnvTests, FileEnvTests, SchemaEnvTests, PathTests, DatabaseTestSuite, CacheTestSuite, EmailTests]:
+    cases = [
+        EnvTests, FileEnvTests, SubClassTests, SchemaEnvTests, PathTests,
+        DatabaseTestSuite, CacheTestSuite, EmailTests, SearchTestSuite
+    ]
+    for case in cases:
         test_suite.addTest(unittest.makeSuite(case))
     return test_suite
 

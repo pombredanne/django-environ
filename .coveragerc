@@ -1,0 +1,3 @@
+[run]
+source = environ/
+omit = environ/test.py

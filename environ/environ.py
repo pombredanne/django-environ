@@ -2,16 +2,12 @@
 Django-environ allows you to utilize 12factor inspired environment
 variables to configure your Django application.
 """
-from __future__ import unicode_literals
-import os
-import sys
-import re
 import json
-import warnings
-
 import logging
-
-logger = logging.getLogger(__file__)
+import os
+import re
+import sys
+import warnings
 
 try:
     from django.core.exceptions import ImproperlyConfigured
@@ -19,37 +15,43 @@ except ImportError:
     class ImproperlyConfigured(Exception):
         pass
 
-try:
-    import urllib.parse as urlparse
-except ImportError:
-    # Python <= 2.6
-    import urlparse
+from six.moves import urllib_parse as urlparse
+from six import string_types
 
 
-if sys.version < '3':
-    text_type = unicode
-else:
-    text_type = str
-    basestring = str
+logger = logging.getLogger(__name__)
 
 
+VERSION = '0.4.0'
 __author__ = 'joke2k'
-__version__ = (0, 3, 0)
+__version__ = tuple(VERSION.split('.'))
 
 
 # return int if possible
-_cast_int = lambda v: int(v) if isinstance(v, basestring) and v.isdigit() else v
-# return str if possibile
-_cast_str = lambda v: str(v) if isinstance(v, basestring) else v
+def _cast_int(v):
+    return int(v) if hasattr(v, 'isdigit') and v.isdigit() else v
+
+# back compatibility with redis_cache package
+DJANGO_REDIS_DRIVER = 'django_redis.cache.RedisCache'
+DJANGO_REDIS_CACHE_DRIVER = 'redis_cache.RedisCache'
+
+REDIS_DRIVER = DJANGO_REDIS_DRIVER
+try:
+    import redis_cache
+    REDIS_DRIVER = DJANGO_REDIS_CACHE_DRIVER
+except:
+    pass
 
 
 class NoValue(object):
+
     def __repr__(self):
         return '<{0}>'.format(self.__class__.__name__)
 
 
 class Env(object):
-    """Provide schema-based lookups of environment variables so that each
+
+    """Provide scheme-based lookups of environment variables so that each
     caller doesn't have to pass in `cast` and `default` parameters.
 
     Usage:::
@@ -59,6 +61,7 @@ class Env(object):
             ...
     """
 
+    ENVIRON = os.environ
     NOTSET = NoValue()
     BOOLEAN_TRUE_STRINGS = ('true', 'on', 'ok', 'y', 'yes', '1')
     URL_CLASS = urlparse.ParseResult
@@ -66,13 +69,16 @@ class Env(object):
     DB_SCHEMES = {
         'postgres': 'django.db.backends.postgresql_psycopg2',
         'postgresql': 'django.db.backends.postgresql_psycopg2',
+        'psql': 'django.db.backends.postgresql_psycopg2',
         'pgsql': 'django.db.backends.postgresql_psycopg2',
         'postgis': 'django.contrib.gis.db.backends.postgis',
         'mysql': 'django.db.backends.mysql',
         'mysql2': 'django.db.backends.mysql',
         'mysqlgis': 'django.contrib.gis.db.backends.mysql',
+        'oracle': 'django.db.backends.oracle',
         'spatialite': 'django.contrib.gis.db.backends.spatialite',
         'sqlite': 'django.db.backends.sqlite3',
+        'ldap': 'ldapdb.backends.ldap',
     }
     _DB_BASE_OPTIONS = ['CONN_MAX_AGE', 'ATOMIC_REQUESTS', 'AUTOCOMMIT']
 
@@ -84,34 +90,35 @@ class Env(object):
         'locmemcache': 'django.core.cache.backends.locmem.LocMemCache',
         'memcache': 'django.core.cache.backends.memcached.MemcachedCache',
         'pymemcache': 'django.core.cache.backends.memcached.PyLibMCCache',
-        'rediscache': 'redis_cache.cache.RedisCache',
-        'redis': 'redis_cache.cache.RedisCache',
+        'rediscache': REDIS_DRIVER,
+        'redis': REDIS_DRIVER,
     }
-    _CACHE_BASE_OPTIONS = ['TIMEOUT', 'KEY_PREFIX', 'VERSION', 'KEY_FUNCTION']
+    _CACHE_BASE_OPTIONS = ['TIMEOUT', 'KEY_PREFIX', 'VERSION', 'KEY_FUNCTION', 'BINARY']
 
     DEFAULT_EMAIL_ENV = 'EMAIL_URL'
     EMAIL_SCHEMES = {
         'smtp': 'django.core.mail.backends.smtp.EmailBackend',
         'smtps': 'django.core.mail.backends.smtp.EmailBackend',
+        'smtp+tls': 'django.core.mail.backends.smtp.EmailBackend',
+        'smtp+ssl': 'django.core.mail.backends.smtp.EmailBackend',
         'consolemail': 'django.core.mail.backends.console.EmailBackend',
         'filemail': 'django.core.mail.backends.filebased.EmailBackend',
         'memorymail': 'django.core.mail.backends.locmem.EmailBackend',
         'dummymail': 'django.core.mail.backends.dummy.EmailBackend'
     }
-    _EMAIL_BASE_OPTIONS = ['EMAIL_USE_TLS', ]
+    _EMAIL_BASE_OPTIONS = ['EMAIL_USE_TLS', 'EMAIL_USE_SSL']
 
     DEFAULT_SEARCH_ENV = 'SEARCH_URL'
     SEARCH_SCHEMES = {
         "elasticsearch": "haystack.backends.elasticsearch_backend.ElasticsearchSearchEngine",
         "solr": "haystack.backends.solr_backend.SolrEngine",
         "whoosh": "haystack.backends.whoosh_backend.WhooshEngine",
+        "xapian": "haystack.backends.xapian_backend.XapianEngine",
         "simple": "haystack.backends.simple_backend.SimpleEngine",
     }
 
-
-
-    def __init__(self, **schema):
-        self.schema = schema
+    def __init__(self, **scheme):
+        self.scheme = scheme
 
     def __call__(self, var, cast=None, default=NOTSET, parse_default=False):
         return self.get_value(var, cast=cast, default=default, parse_default=parse_default)
@@ -128,7 +135,7 @@ class Env(object):
         """Helper for python2
         :rtype: unicode
         """
-        return self.get_value(var, cast=text_type, default=default)
+        return self.get_value(var, cast=str, default=default)
 
     def bool(self, var, default=NOTSET):
         """
@@ -160,6 +167,12 @@ class Env(object):
         """
         return self.get_value(var, cast=list if not cast else [cast], default=default)
 
+    def tuple(self, var, cast=None, default=NOTSET):
+        """
+        :rtype: tuple
+        """
+        return self.get_value(var, cast=tuple if not cast else (cast,), default=default)
+
     def dict(self, var, cast=dict, default=NOTSET):
         """
         :rtype: dict
@@ -178,7 +191,7 @@ class Env(object):
         :rtype: dict
         """
         return self.db_url_config(self.get_value(var, default=default), engine=engine)
-    db=db_url
+    db = db_url
 
     def cache_url(self, var=DEFAULT_CACHE_ENV, default=NOTSET, backend=None):
         """Returns a config dictionary, defaulting to CACHE_URL.
@@ -186,6 +199,7 @@ class Env(object):
         :rtype: dict
         """
         return self.cache_url_config(self.url(var, default=default), backend=backend)
+    cache = cache_url
 
     def email_url(self, var=DEFAULT_EMAIL_ENV, default=NOTSET, backend=None):
         """Returns a config dictionary, defaulting to EMAIL_URL.
@@ -193,6 +207,7 @@ class Env(object):
         :rtype: dict
         """
         return self.email_url_config(self.url(var, default=default), backend=backend)
+    email = email_url
 
     def search_url(self, var=DEFAULT_SEARCH_ENV, default=NOTSET, engine=None):
         """Returns a config dictionary, defaulting to SEARCH_URL.
@@ -218,10 +233,12 @@ class Env(object):
         :returns: Value from environment or default (if set)
         """
 
-        logger.debug("get '{0}' casted as '{1}' with default '{2}'".format(var, cast, default))
+        logger.debug("get '{0}' casted as '{1}' with default '{2}'".format(
+            var, cast, default
+        ))
 
-        if var in self.schema:
-            var_info = self.schema[var]
+        if var in self.scheme:
+            var_info = self.scheme[var]
 
             try:
                 has_default = len(var_info) == 2
@@ -242,7 +259,7 @@ class Env(object):
                     cast = var_info
 
         try:
-            value = os.environ[var]
+            value = self.ENVIRON[var]
         except KeyError:
             if default is self.NOTSET:
                 error_msg = "Set the {0} environment variable".format(var)
@@ -255,7 +272,7 @@ class Env(object):
             value = value.lstrip('$')
             value = self.get_value(value, cast=cast, default=default)
 
-        if value != default or parse_default:
+        if value != default or (parse_default and value):
             value = self.parse_value(value, cast)
 
         return value
@@ -280,19 +297,27 @@ class Env(object):
                 value = value.lower() in cls.BOOLEAN_TRUE_STRINGS
         elif isinstance(cast, list):
             value = list(map(cast[0], [x for x in value.split(',') if x]))
+        elif isinstance(cast, tuple):
+            val = value.strip('(').strip(')').split(',')
+            value = tuple(map(cast[0], [x for x in val if x]))
         elif isinstance(cast, dict):
             key_cast = cast.get('key', str)
-            value_cast = cast.get('value', text_type)
+            value_cast = cast.get('value', str)
             value_cast_by_key = cast.get('cast', dict())
             value = dict(map(
-                lambda kv: (key_cast(kv[0]), cls.parse_value(kv[1], value_cast_by_key.get(kv[0], value_cast))),
+                lambda kv: (
+                    key_cast(kv[0]),
+                    cls.parse_value(kv[1], value_cast_by_key.get(kv[0], value_cast))
+                ),
                 [val.split('=') for val in value.split(';') if val]
             ))
         elif cast is dict:
-        #elif hasattr(cast, '__name__') and cast.__name__ == 'dict':
             value = dict([val.split('=') for val in value.split(',') if val])
         elif cast is list:
             value = [x for x in value.split(',') if x]
+        elif cast is tuple:
+            val = value.strip('(').strip(')').split(',')
+            value = tuple([x for x in val if x])
         elif cast is float:
             # clean string
             float_str = re.sub(r'[^\d,\.]', '', value)
@@ -310,7 +335,7 @@ class Env(object):
     @classmethod
     def db_url_config(cls, url, engine=None):
         """Pulled from DJ-Database-URL, parse an arbitrary Database URL.
-        Support currently exists for PostgreSQL, PostGIS, MySQL and SQLite.
+        Support currently exists for PostgreSQL, PostGIS, MySQL, Oracle and SQLite.
 
         SQLite connects to file based databases. The same URL format is used, omitting the hostname,
         and using the "file" portion as the filename of the database.
@@ -318,7 +343,7 @@ class Env(object):
 
         >>> from environ import Env
         >>> Env.db_url_config('sqlite:////full/path/to/your/file.sqlite')
-        {'ENGINE': 'django.db.backends.sqlite3', 'HOST': None, 'NAME': '/full/path/to/your/file.sqlite', 'PASSWORD': None, 'PORT': None, 'USER': None}
+        {'ENGINE': 'django.db.backends.sqlite3', 'HOST': '', 'NAME': '/full/path/to/your/file.sqlite', 'PASSWORD': '', 'PORT': '', 'USER': ''}
         >>> Env.db_url_config('postgres://uf07k1i6d8ia0v:wegauwhgeuioweg@ec2-107-21-253-135.compute-1.amazonaws.com:5431/d8r82722r2kuvn')
         {'ENGINE': 'django.db.backends.postgresql_psycopg2', 'HOST': 'ec2-107-21-253-135.compute-1.amazonaws.com', 'NAME': 'd8r82722r2kuvn', 'PASSWORD': 'wegauwhgeuioweg', 'PORT': 5431, 'USER': 'uf07k1i6d8ia0v'}
 
@@ -345,15 +370,26 @@ class Env(object):
         # want an in-memory database (this is the behaviour of sqlalchemy)
         if url.scheme == 'sqlite' and path == '':
             path = ':memory:'
+        if url.scheme == 'ldap':
+            path = '{scheme}://{hostname}'.format(scheme=url.scheme, hostname=url.hostname)
+            if url.port:
+                path += ':{port}'.format(port=url.port)
 
         # Update with environment configuration.
         config.update({
-            'NAME': path,
-            'USER': _cast_str(url.username),
-            'PASSWORD': _cast_str(url.password),
-            'HOST': _cast_str(url.hostname),
-            'PORT': _cast_int(url.port),
+            'NAME': path or '',
+            'USER': url.username or '',
+            'PASSWORD': url.password or '',
+            'HOST': url.hostname or '',
+            'PORT': _cast_int(url.port) or '',
         })
+
+        if url.scheme == 'oracle' and path == '':
+            config['NAME'] = config['HOST']
+            config['HOST'] = ''
+
+        if url.scheme == 'oracle' and not config['PORT']:
+            del(config['PORT']) # Django oracle/base.py strips port and fails on None
 
         if url.query:
             config_options = {}
@@ -369,6 +405,10 @@ class Env(object):
         if url.scheme in Env.DB_SCHEMES:
             config['ENGINE'] = Env.DB_SCHEMES[url.scheme]
 
+        if not config.get('ENGINE', False):
+            warnings.warn("Engine not recognized from url: {0}".format(config))
+            return {}
+
         return config
 
     @classmethod
@@ -376,7 +416,7 @@ class Env(object):
         """Pulled from DJ-Cache-URL, parse an arbitrary Cache URL.
 
         :param url:
-        :param overrides:
+        :param backend:
         :return:
         """
         url = urlparse.urlparse(url) if not isinstance(url, cls.URL_CLASS) else url
@@ -390,15 +430,23 @@ class Env(object):
             'LOCATION': location,
         }
 
+        # Add the drive to LOCATION
         if url.scheme == 'filecache':
             config.update({
-                'LOCATION': _cast_str(url.netloc + url.path),
+                'LOCATION': url.netloc + url.path,
             })
 
-        if url.path and url.scheme in ['memcache', 'pymemcache', 'rediscache']:
+        if url.path and url.scheme in ['memcache', 'pymemcache']:
             config.update({
                 'LOCATION': 'unix:' + url.path,
             })
+        elif url.scheme.startswith('redis'):
+            if url.hostname:
+                scheme = url.scheme.replace('cache', '')
+            else:
+                scheme = 'unix'
+
+            config['LOCATION'] = scheme + '://' + url.netloc + url.path
 
         if url.query:
             config_options = {}
@@ -430,21 +478,23 @@ class Env(object):
         # Update with environment configuration
         config.update({
             'EMAIL_FILE_PATH': path,
-            'EMAIL_HOST_USER': _cast_str(url.username),
-            'EMAIL_HOST_PASSWORD': _cast_str(url.password),
-            'EMAIL_HOST': _cast_str(url.hostname),
+            'EMAIL_HOST_USER': url.username,
+            'EMAIL_HOST_PASSWORD': url.password,
+            'EMAIL_HOST': url.hostname,
             'EMAIL_PORT': _cast_int(url.port),
         })
 
         if backend:
             config['EMAIL_BACKEND'] = backend
+        elif url.scheme not in cls.EMAIL_SCHEMES:
+            raise ImproperlyConfigured('Invalid email schema %s' % url.scheme)
         elif url.scheme in cls.EMAIL_SCHEMES:
             config['EMAIL_BACKEND'] = cls.EMAIL_SCHEMES[url.scheme]
 
-        if url.scheme == 'smtps':
+        if url.scheme in ('smtps', 'smtp+tls'):
             config['EMAIL_USE_TLS'] = True
-        else:
-            config['EMAIL_USE_TLS'] = False
+        elif url.scheme == 'smtp+ssl':
+            config['EMAIL_USE_SSL'] = True
 
         if url.query:
             config_options = {}
@@ -468,38 +518,72 @@ class Env(object):
         path = url.path[1:]
         path = path.split('?', 2)[0]
 
-        if url.scheme in cls.SEARCH_SCHEMES:
-            config["ENGINE"] = cls.SEARCH_SCHEMES[url.scheme]
+        if url.scheme not in cls.SEARCH_SCHEMES:
+            raise ImproperlyConfigured('Invalid search schema %s' % url.scheme)
+        config["ENGINE"] = cls.SEARCH_SCHEMES[url.scheme]
 
+        # check commons params
+        params = {}
+        if url.query:
+            params = urlparse.parse_qs(url.query)
+            if 'EXCLUDED_INDEXES' in params.keys():
+                config['EXCLUDED_INDEXES'] = params['EXCLUDED_INDEXES'][0].split(',')
+            if 'INCLUDE_SPELLING' in params.keys():
+                config['INCLUDE_SPELLING'] = cls.parse_value(params['INCLUDE_SPELLING'][0], bool)
+            if 'BATCH_SIZE' in params.keys():
+                config['BATCH_SIZE'] = cls.parse_value(params['BATCH_SIZE'][0], int)
+
+        if url.scheme == 'simple':
+            return config
+        elif url.scheme in ['solr', 'elasticsearch']:
+            if 'KWARGS' in params.keys():
+                config['KWARGS'] = params['KWARGS'][0]
+
+        # remove trailing slash
         if path.endswith("/"):
             path = path[:-1]
 
-        split = path.rsplit("/", 1)
+        if url.scheme == 'solr':
+            config['URL'] = urlparse.urlunparse(('http',) + url[1:2] + (path,) + ('', '', ''))
+            if 'TIMEOUT' in params.keys():
+                config['TIMEOUT'] = cls.parse_value(params['TIMEOUT'][0], int)
+            return config
 
-        if len(split) > 1:
-            path = split[:-1]
-            index = split[-1]
-        else:
-            path = ""
-            index = split[0]
+        if url.scheme == 'elasticsearch':
 
-        config.update({
-            "URL": urlparse.urlunparse(("http",) + url[1:2] + (path,) + url[3:]),
-            "INDEX_NAME": index,
-            })
+            split = path.rsplit("/", 1)
 
-        if path:
-            config.update({
-                "PATH": path,
-            })
+            if len(split) > 1:
+                path = "/".join(split[:-1])
+                index = split[-1]
+            else:
+                path = ""
+                index = split[0]
+
+            config['URL'] = urlparse.urlunparse(('http',) + url[1:2] + (path,) + ('', '', ''))
+            if 'TIMEOUT' in params.keys():
+                config['TIMEOUT'] = cls.parse_value(params['TIMEOUT'][0], int)
+            config['INDEX_NAME'] = index
+            return config
+
+        config['PATH'] = '/' + path
+
+        if url.scheme == 'whoosh':
+            if 'STORAGE' in params.keys():
+                config['STORAGE'] = params['STORAGE'][0]
+            if 'POST_LIMIT' in params.keys():
+                config['POST_LIMIT'] = cls.parse_value(params['POST_LIMIT'][0], int)
+        elif url.scheme == 'xapian':
+            if 'FLAGS' in params.keys():
+                config['FLAGS'] = params['FLAGS'][0]
 
         if engine:
             config['ENGINE'] = engine
 
         return config
 
-    @staticmethod
-    def read_env(env_file=None, **overrides):
+    @classmethod
+    def read_env(cls, env_file=None, **overrides):
         """Read a .env file into os.environ.
 
         If not given a path to a dotenv path, does filthy magic stack backtracking
@@ -517,7 +601,7 @@ class Env(object):
                 return
 
         try:
-            with open(env_file) if isinstance(env_file, basestring) else env_file as f:
+            with open(env_file) if isinstance(env_file, string_types) else env_file as f:
                 content = f.read()
         except IOError:
             warnings.warn("not reading %s - it doesn't exist." % env_file)
@@ -535,14 +619,15 @@ class Env(object):
                 m3 = re.match(r'\A"(.*)"\Z', val)
                 if m3:
                     val = re.sub(r'\\(.)', r'\1', m3.group(1))
-                os.environ.setdefault(key, text_type(val))
+                cls.ENVIRON.setdefault(key, str(val))
 
         # set defaults
         for key, value in overrides.items():
-            os.environ.setdefault(key, value)
+            cls.ENVIRON.setdefault(key, value)
 
 
 class Path(object):
+
     """Inspired to Django Two-scoops, handling File Paths in Settings.
 
         >>> from environ import Path
@@ -616,14 +701,15 @@ class Path(object):
         return not self.__eq__(other)
 
     def __add__(self, other):
-        return Path(self.__root__, other if not isinstance(other, Path) else other.__root__[1:])
+        return Path(self.__root__, other if not isinstance(other, Path) else other.__root__)
 
     def __sub__(self, other):
         if isinstance(other, int):
             return self.path('../' * other)
-        elif isinstance(other, (str, text_type)):
+        elif isinstance(other, string_types):
             return Path(self.__root__.rstrip(other))
-        raise TypeError("unsupported operand type(s) for -: '{0}' and '{1}'".format(self, type(other)))
+        raise TypeError(
+            "unsupported operand type(s) for -: '{0}' and '{1}'".format(self, type(other)))
 
     def __invert__(self):
         return self.path('..')
@@ -631,7 +717,7 @@ class Path(object):
     def __contains__(self, item):
         base_path = self.__root__
         if len(base_path) > 1:
-            base_path += '/'
+            base_path = os.path.join(base_path, '')
         return item.__root__.startswith(base_path)
 
     def __repr__(self):
@@ -643,17 +729,37 @@ class Path(object):
     def __unicode__(self):
         return self.__str__()
 
+    def __getitem__(self, *args, **kwargs):
+        return self.__str__().__getitem__(*args, **kwargs)
+
+    def rfind(self, *args, **kwargs):
+        return self.__str__().rfind(*args, **kwargs)
+
+    def find(self, *args, **kwargs):
+        return self.__str__().find(*args, **kwargs)
+
     @staticmethod
     def _absolute_join(base, *paths, **kwargs):
         absolute_path = os.path.abspath(os.path.join(base, *paths))
         if kwargs.get('required', False) and not os.path.exists(absolute_path):
-            raise ImproperlyConfigured("Create required path: {0}".format(absolute_path))
+            raise ImproperlyConfigured(
+                "Create required path: {0}".format(absolute_path))
         return absolute_path
 
+
 def register_scheme(scheme):
-    for method in filter(lambda s: s.startswith('uses_'), dir(urlparse)):
-        getattr(urlparse, method).append(scheme)
+    for method in dir(urlparse):
+        if method.startswith('uses_'):
+            getattr(urlparse, method).append(scheme)
+
+
+def register_schemes(schemes):
+    for scheme in schemes:
+        register_scheme(scheme)
+
 
 # Register database and cache schemes in URLs.
-for schema in list(Env.DB_SCHEMES.keys()) + list(Env.CACHE_SCHEMES.keys()) + list(Env.SEARCH_SCHEMES.keys()) +list(Env.EMAIL_SCHEMES.keys()):
-    register_scheme(schema)
+register_schemes(Env.DB_SCHEMES.keys())
+register_schemes(Env.CACHE_SCHEMES.keys())
+register_schemes(Env.SEARCH_SCHEMES.keys())
+register_schemes(Env.EMAIL_SCHEMES.keys())

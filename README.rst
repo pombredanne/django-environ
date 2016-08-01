@@ -1,20 +1,30 @@
+==============
 Django-environ
 ==============
 
 Django-environ allows you to utilize 12factor inspired environment variables to configure your Django application.
 
-.. image:: https://travis-ci.org/joke2k/django-environ.svg?branch=develop
-  :target: https://travis-ci.org/joke2k/django-environ
-.. image:: https://coveralls.io/repos/joke2k/django-environ/badge.png?branch=develop
-  :target: https://coveralls.io/r/joke2k/django-environ?branch=develop
-.. image:: https://badge.fury.io/py/django-environ.png
-  :target: http://badge.fury.io/py/django-environ
-.. image:: https://pypip.in/d/django-environ/badge.png
-  :target: https://crate.io/packages/django-environ
+|pypi| |unix_build| |windows_build| |coverage| |downloads| |license|
+
+
+This module is a merge of:
+
+* `envparse`_
+* `honcho`_
+* `dj-database-url`_
+* `dj-search-url`_
+* `dj-config-url`_
+* `django-cache-url`_
+
+and inspired by:
+
+* `12factor`_
+* `12factor-django`_
+* `Two Scoops of Django`_
 
 This is your `settings.py` file before you have installed **django-environ**
 
-::
+.. code-block:: python
 
     import os
     SITE_ROOT = os.path.dirname(os.path.dirname(os.path.dirname(os.path.realpath(__file__))))
@@ -52,16 +62,18 @@ This is your `settings.py` file before you have installed **django-environ**
             ]
         },
         'redis': {
-            'BACKEND': 'redis_cache.cache.RedisCache',
+            'BACKEND': 'django_redis.cache.RedisCache',
             'LOCATION': '127.0.0.1:6379:1',
             'OPTIONS': {
-                'CLIENT_CLASS': 'redis_cache.client.DefaultClient',
+                'CLIENT_CLASS': 'django_redis.client.DefaultClient',
                 'PASSWORD': 'redis-githubbed-password',
             }
         }
     }
 
-After::
+After:
+
+.. code-block:: python
 
     import environ
     root = environ.Path(__file__) - 3 # three folder back (/a/b/c/ - 3 = /)
@@ -88,12 +100,15 @@ After::
     SECRET_KEY = env('SECRET_KEY') # Raises ImproperlyConfigured exception if SECRET_KEY not in os.environ
 
     CACHES = {
-        'default: env.cache(),
+        'default': env.cache(),
         'redis': env.cache('REDIS_URL')
     }
 
-You can also pass `read_env()` an explicit path to the .env file.
-Create a `.env` file::
+You can also pass ``read_env()`` an explicit path to the ``.env`` file.
+
+Create a ``.env`` file:
+
+.. code-block:: bash
 
     DEBUG=on
     # DJANGO_SETTINGS_MODULE=myapp.settings.dev
@@ -101,11 +116,11 @@ Create a `.env` file::
     DATABASE_URL=psql://urser:un-githubbedpassword@127.0.0.1:8458/database
     # SQLITE_URL=sqlite:///my-local-sqlite.db
     CACHE_URL=memcache://127.0.0.1:11211,127.0.0.1:11212,127.0.0.1:11213
-    REDIS_URL=rediscache://127.0.0.1:6379:1?client_class=redis_cache.client.DefaultClient&password=redis-un-githubbed-password
+    REDIS_URL=rediscache://127.0.0.1:6379:1?client_class=django_redis.client.DefaultClient&password=redis-un-githubbed-password
 
 
 How to install
---------------
+==============
 
 ::
 
@@ -113,11 +128,11 @@ How to install
 
 
 How to use
-----------
+==========
 
-There are only classes, Env and Path
+There are only two classes, ``environ.Env`` and ``environ.Path``
 
-::
+.. code-block:: python
 
     >>> import environ
     >>> env = environ.Env(
@@ -129,7 +144,7 @@ There are only classes, Env and Path
     True
 
     >>> open('.myenv', 'a').write('DEBUG=on')
-    >>> environ.Env.read_env('.`myenv') # or env.read_env('.myenv')
+    >>> environ.Env.read_env('.myenv') # or env.read_env('.myenv')
     >>> env('DEBUG')
     True
 
@@ -148,7 +163,7 @@ There are only classes, Env and Path
 
 
 Supported Types
----------------
+===============
 
 - str
 - bool
@@ -156,17 +171,20 @@ Supported Types
 - float
 - json
 - list (FOO=a,b,c)
-- dict (BAR=key=val;foo=bar)
+- tuple (FOO=(a,b,c))
+- dict (BAR=key=val,foo=bar) #environ.Env(BAR=(dict, {}))
+- dict (BAR=key=val;foo=1.1;baz=True) #environ.Env(BAR=(dict(value=unicode, cast=dict(foo=float,baz=bool)), {}))
 - url
 - path (environ.Path)
 - db_url
-    -  PostgreSQL: postgres://, pgsql:// or postgresql://
+    -  PostgreSQL: postgres://, pgsql://, psql:// or postgresql://
     -  PostGIS: postgis://
     -  MySQL: mysql:// or mysql2://
     -  MySQL for GeoDjango: mysqlgis://
     -  SQLITE: sqlite://
     -  SQLITE with SPATIALITE for GeoDjango: spatialite://
-
+    -  Oracle: oracle://
+    -  LDAP: ldap://
 - cache_url
     -  Database: dbcache://
     -  Dummy: dummycache://
@@ -179,17 +197,35 @@ Supported Types
     - ElasticSearch: elasticsearch://
     - Solr: solr://
     - Whoosh: whoosh://
+    - Xapian: xapian://
     - Simple cache: simple://
 - email_url
     - SMTP: smtp://
-    - SMTPS: smtps://
+    - SMTP+SSL: smtp+ssl://
+    - SMTP+TLS: smtp+tls://
     - Console mail: consolemail://
     - File mail: filemail://
     - LocMem mail: memorymail://
     - Dummy mail: dummymail://
 
+Tips
+====
+
+Email settings
+--------------
+
+In order to set email configuration for django you can use this code:
+
+.. code-block:: python
+
+    EMAIL_CONFIG = env.email_url(
+        'EMAIL_URL', default='smtp://user@:password@localhost:25')
+
+    vars().update(EMAIL_CONFIG)
+
+
 Tests
------
+=====
 
 ::
 
@@ -198,34 +234,46 @@ Tests
     $ python setup.py test
 
 
+License
+=======
+
+Django-environ is licensed under the MIT License - see the `LICENSE`_ file for details
+
 Changelog
----------
+=========
 
-=== 0.3.0 (2014-06-??) ===
+`0.4.0 - 23-September-2015 <http://github.com/joke2k/django-environ/compare/v0.3...v0.4>`__
+-------------------------------------------------------------------------------------------
+  - Fix non-ascii values (broken in Python 2.x)
+  - New email schemes - smtp+ssl and smtp+tls (smtps would be deprecated)
+  - redis_cache replaced by django_redis
+  - Add tuple support. Thanks to @anonymouzz
+  - Add LDAP url support for database (django-ldapdb)
+  - Fix psql/pgsql url
 
-  * Add cache url support
-  * Add email url support
-  * Add search url support
-  * Rewriting README.rst
+`0.3 - 03-June-2014 <http://github.com/joke2k/django-environ/compare/v0.2.1...v0.3>`__
+--------------------------------------------------------------------------------------
+  - Add cache url support
+  - Add email url support
+  - Add search url support
+  - Rewriting README.rst
 
+0.2.1 19-April-2013
+-------------------
+  - environ/environ.py: Env.__call__ now uses Env.get_value instance method
 
-=== 0.2.1 (2013-04-19) ===
-
-  * environ/environ.py: Env.__call__ now uses Env.get_value instance method
-
-=== 0.2 (2013-04-16) ===
-
-  * environ/environ.py, environ/test.py, environ/test_env.txt: add advanced
+0.2 16-April-2013
+-----------------
+  - environ/environ.py, environ/test.py, environ/test_env.txt: add advanced
     float parsing (comma and dot symbols to separate thousands and decimals)
+  - README.rst, docs/index.rst: fix TYPO in documentation
 
-  * README.rst, docs/index.rst: fix TYPO in documentation
-
-=== 0.1 (2013-04-02) ===
-
-  * initial release
+0.1 02-April-2013
+-----------------
+  - initial release
 
 Credits
--------
+=======
 
 - `12factor`_
 - `12factor-django`_
@@ -233,7 +281,8 @@ Credits
 - `rconradharris`_ / `envparse`_
 - `kennethreitz`_ / `dj-database-url`_
 - `migonzalvar`_ / `dj-email-url`_
-- `ghickman`_ / `dj-cache-url`_
+- `ghickman`_ / `django-cache-url`_
+- `dstufft`_ / `dj-search-url`_
 - `julianwachholz`_ / `dj-config-url`_
 - `nickstenning`_ / `honcho`_
 - `envparse`_
@@ -250,18 +299,46 @@ Credits
 .. _dj-email-url: https://github.com/migonzalvar/dj-email-url
 
 .. _ghickman: https://github.com/ghickman
-.. _dj-cache-url: https://github.com/ghickman/django-cache-url
+.. _django-cache-url: https://github.com/ghickman/django-cache-url
 
 .. _julianwachholz: https://github.com/julianwachholz
 .. _dj-config-url: https://github.com/julianwachholz/dj-config-url
+
+.. _dstufft: https://github.com/dstufft
+.. _dj-search-url: https://github.com/dstufft/dj-search-url
 
 .. _nickstenning: https://github.com/nickstenning
 .. _honcho: https://github.com/nickstenning/honcho
 
 .. _12factor: http://www.12factor.net/
 .. _12factor-django: http://www.wellfireinteractive.com/blog/easier-12-factor-django/
-.. _`Two Scoops of Django`: https://django.2scoops.org (book)
-
+.. _`Two Scoops of Django`: http://twoscoopspress.org/
 
 .. _Distribute: http://pypi.python.org/pypi/distribute
 .. _`modern-package-template`: http://pypi.python.org/pypi/modern-package-template
+
+.. |pypi| image:: https://img.shields.io/pypi/v/django-environ.svg?style=flat-square&label=version
+    :target: https://pypi.python.org/pypi/django-environ
+    :alt: Latest version released on PyPi
+
+.. |coverage| image:: https://img.shields.io/coveralls/joke2k/django-environ/master.svg?style=flat-square
+    :target: https://coveralls.io/r/joke2k/django-environ?branch=master
+    :alt: Test coverage
+
+.. |unix_build| image:: https://img.shields.io/travis/joke2k/django-environ/master.svg?style=flat-square&label=unix%20build
+    :target: http://travis-ci.org/joke2k/django-environ
+    :alt: Build status of the master branch on Mac/Linux
+
+.. |windows_build|  image:: https://img.shields.io/appveyor/ci/joke2k/django-environ.svg?style=flat-square&label=windows%20build
+    :target: https://ci.appveyor.com/project/joke2k/django-environ
+    :alt: Build status of the master branch on Windows
+
+.. |downloads| image:: https://img.shields.io/pypi/dm/django-environ.svg?style=flat-square
+    :target: https://pypi.python.org/pypi/django-environ
+    :alt: Monthly downloads
+
+.. |license| image:: https://img.shields.io/badge/license-MIT-blue.svg?style=flat-square
+    :target: https://raw.githubusercontent.com/joke2k/django-environ/master/LICENSE.txt
+    :alt: Package license
+
+.. _LICENSE: https://github.com/joke2k/django-environ/blob/master/LICENSE.txt
